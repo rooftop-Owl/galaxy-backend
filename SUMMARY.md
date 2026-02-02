@@ -1,20 +1,23 @@
 # Galaxy Backend: GPU Cluster Extension Summary
 
 **Date**: 2026-02-03  
-**Commits**: 4 commits (ac949bb → f531b76)  
-**Files Created**: 6 files (1,389 lines of documentation + 1 setup script)
+**Commits**: 7 commits (ac949bb → 1ac424c)  
+**Files Created**: 7 files (1,976 lines of documentation + 1 setup script)
 
 ---
 
 ## What Was Delivered
 
-### 1. Comprehensive Documentation (1,389 lines)
+### 1. Comprehensive Documentation (1,976 lines)
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| **GPU_CLUSTER_SETUP.md** | 786 | Complete setup guide with hardware requirements, deployment architectures, performance tuning, cost analysis, and troubleshooting |
+| **GPU_CLUSTER_SETUP.md** | 547 | Complete setup guide with hardware requirements, deployment architectures, performance tuning, cost analysis, and troubleshooting |
+| **CLUSTER_DEPLOYMENT_GUIDE.md** | 587 | Step-by-step deployment scenarios (root access, user-space, K8s), network configuration, monitoring, and security |
 | **ARCHITECTURE.md** | 449 | System design documentation with visual diagrams, agent routing matrix, deployment patterns, and monitoring guide |
 | **QUICK_REFERENCE.md** | 154 | One-page cheat sheet for quick access to essential commands and configurations |
+| **STRUCTURE.txt** | 85 | Directory tree structure |
+| **SUMMARY.md** | 154 | This file — executive summary |
 
 ### 2. Automated Setup Tool
 
@@ -203,21 +206,24 @@ Workstations → K8s LoadBalancer → Ollama Pods → GPU Pool
 |------|----------|--------|---------|
 | **README.md** | Everyone | 1 page | Quick start, overview |
 | **QUICK_REFERENCE.md** | Daily users | 1 page | Command cheat sheet |
-| **GPU_CLUSTER_SETUP.md** | Setup engineers | 15 pages | Complete setup guide |
+| **GPU_CLUSTER_SETUP.md** | Setup engineers | 15 pages | Complete hardware/software setup guide |
+| **CLUSTER_DEPLOYMENT_GUIDE.md** | DevOps engineers | 16 pages | Deployment scenarios, network config, security |
 | **ARCHITECTURE.md** | Architects | 10 pages | System design, patterns |
 | **SUMMARY.md** | Decision makers | This file | Executive summary |
 
 **Reading order**:
 1. New users → **README.md**
-2. Setting up → **GPU_CLUSTER_SETUP.md**
-3. Daily work → **QUICK_REFERENCE.md**
-4. Deep dive → **ARCHITECTURE.md**
+2. Hardware setup → **GPU_CLUSTER_SETUP.md**
+3. Deployment → **CLUSTER_DEPLOYMENT_GUIDE.md**
+4. Daily work → **QUICK_REFERENCE.md**
+5. Deep dive → **ARCHITECTURE.md**
 
 ---
 
 ## Git History
 
 ```
+1ac424c Add comprehensive Linux cluster deployment guide
 f531b76 Add quick reference card for GPU cluster setup
 78e2e02 Add architecture documentation for GPU cluster
 7c28789 Add GPU cluster setup documentation and tooling
@@ -225,7 +231,7 @@ ac949bb init: galaxy-backend
 ```
 
 **Branch**: `main`  
-**Remote**: Ready to push to `origin/main`
+**Remote**: 6 commits ahead of origin/main (ready to push)
 
 ---
 
