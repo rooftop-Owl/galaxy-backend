@@ -1,0 +1,12 @@
+{
+  "telegram_token": "YOUR_BOT_TOKEN",
+  "authorized_users": [123456789],
+  "machines": {
+    "local": {
+      "host": "localhost",
+      "repo_path": "/home/user/projects/my-project"
+    }
+  },
+  "default_machine": "local",
+  "poll_interval": 30
+}
