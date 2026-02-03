@@ -89,10 +89,13 @@ class WebChannel(BaseChannel):
                     content = data.get("content", "")
                     sender_id = data.get("sender_id", chat_id)
 
-                    # Authorization check
-                    if self.authorized_users and sender_id not in self.authorized_users:
-                        await ws.send_json({"type": "error", "content": "Unauthorized"})
-                        continue
+                    # Authorization check (skip for dynamically generated web-* IDs on localhost)
+                    if self.authorized_users and not sender_id.startswith("web-"):
+                        if sender_id not in self.authorized_users:
+                            await ws.send_json(
+                                {"type": "error", "content": "Unauthorized"}
+                            )
+                            continue
 
                     # Publish to bus
                     await self._handle_message(

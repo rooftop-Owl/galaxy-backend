@@ -22,15 +22,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Paths
-REPO_ROOT = Path(__file__).parent.parent.parent  # project root (when loaded as submodule)
+# PHASE 1: Testing locally in submodule (use MODULE_ROOT for all paths)
+# PHASE 2: Production (change back to REPO_ROOT when running from parent)
+REPO_ROOT = Path(
+    __file__
+).parent.parent.parent  # project root (when loaded as submodule)
 MODULE_ROOT = Path(__file__).parent.parent  # galaxy-protocol module root
-ORDERS_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-orders"
-ARCHIVE_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-orders-archive"
-RESPONSE_DIR = REPO_ROOT / ".sisyphus/notepads"
-OUTBOX_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-outbox"
-HEARTBEAT_FILE = REPO_ROOT / ".sisyphus/notepads/galaxy-session-heartbeat.json"
-GALAXY_CONFIG = REPO_ROOT / ".galaxy/config.json"
-SESSION_FILE = REPO_ROOT / ".galaxy/hermes-session.json"
+ORDERS_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-orders"
+ARCHIVE_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-orders-archive"
+RESPONSE_DIR = MODULE_ROOT / ".sisyphus/notepads"
+OUTBOX_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-outbox"
+HEARTBEAT_FILE = MODULE_ROOT / ".sisyphus/notepads/galaxy-session-heartbeat.json"
+GALAXY_CONFIG = REPO_ROOT / ".galaxy/config.json"  # Config stays in parent
+SESSION_FILE = MODULE_ROOT / ".galaxy/hermes-session.json"
 
 # State
 running = True
@@ -44,6 +48,7 @@ stats = {
 
 # --- Signal Handling ---
 
+
 def shutdown(signum, frame):
     global running
     running = False
@@ -54,7 +59,6 @@ signal.signal(signal.SIGTERM, shutdown)
 
 
 # --- Order Processing ---
-
 
 
 def build_prompt(payload):
@@ -71,15 +75,13 @@ def build_prompt(payload):
         "WORKSPACE: You may create files in the project as directed.\n"
         "- You may READ files anywhere for context\n"
         "- Follow the user's instructions about where to write files.\n"
-        
         "\n"
         "Conversation history: .sisyphus/notepads/galaxy-orders-archive/ (orders) "
         "and .sisyphus/notepads/galaxy-order-response-*.md (responses)\n"
         "Read ONLY the last 3 responses if you need context. Do NOT read all history.\n"
         "\n"
         "RESPOND CONCISELY. This is a Telegram chat — keep replies short and direct.\n"
-        "\n"
-        + payload
+        "\n" + payload
     )
 
 
@@ -138,10 +140,15 @@ def _load_session_id():
 def _save_session_id(session_id):
     """Save session ID for continuity."""
     SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(json.dumps({
-        "session_id": session_id,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }, indent=2))
+    SESSION_FILE.write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+    )
 
 
 def call_agent(payload, server_url):
@@ -222,7 +229,7 @@ def write_response(order_id, order, payload, response_text):
     now = datetime.now(timezone.utc).isoformat()
     content = "# Galaxy Order Response\n\n"
     content += "**Order**: %s\n" % order.get("timestamp", "unknown")
-    content += "**Message**: \"%s\"\n\n" % payload
+    content += '**Message**: "%s"\n\n' % payload
     content += "---\n\n"
     content += response_text + "\n\n"
     content += "---\n\n"
@@ -258,6 +265,7 @@ def send_notification(order_id, payload, response_text):
 
 
 # --- Heartbeat ---
+
 
 def _get_machine_name():
     try:
@@ -298,6 +306,7 @@ def clear_heartbeat():
 
 # --- Outbox: Activation/Deactivation ---
 
+
 def notify_activation(interval):
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     machine = _get_machine_name()
@@ -328,7 +337,8 @@ def notify_deactivation():
         "type": "notification",
         "severity": "info",
         "from": "Hermes",
-        "message": "Hermes Offline - %d delivered - %d failed - %s" % (processed, failed, uptime),
+        "message": "Hermes Offline - %d delivered - %d failed - %s"
+        % (processed, failed, uptime),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "sent": False,
     }
@@ -339,10 +349,18 @@ def notify_deactivation():
 
 # --- Main Loop ---
 
+
 def main():
     parser = argparse.ArgumentParser(description="Hermes - Galaxy Messenger")
-    parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds")
-    parser.add_argument("--server", type=str, default="http://localhost:4096", help="OpenCode server URL")
+    parser.add_argument(
+        "--interval", type=int, default=30, help="Poll interval in seconds"
+    )
+    parser.add_argument(
+        "--server",
+        type=str,
+        default="http://localhost:4096",
+        help="OpenCode server URL",
+    )
     args = parser.parse_args()
 
     print("Hermes - The Galaxy Messenger")

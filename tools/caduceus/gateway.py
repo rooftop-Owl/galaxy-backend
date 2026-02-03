@@ -34,7 +34,7 @@ logger = logging.getLogger("caduceus.gateway")
 
 async def executor_loop(bus: MessageBus, executor: HermesExecutor, channels: dict):
     """Consume inbound messages, execute, publish outbound responses.
-    
+
     Args:
         bus: MessageBus instance
         executor: HermesExecutor to process orders
@@ -43,19 +43,22 @@ async def executor_loop(bus: MessageBus, executor: HermesExecutor, channels: dic
     while True:
         msg = await bus.consume_inbound()
         logger.info(f"Processing: [{msg.channel}:{msg.chat_id}] {msg.content[:80]}")
-        
+
         try:
-            result = await executor.execute({
-                "payload": msg.content,
-                "timestamp": 0,
-                "order_id": msg.session_key,
-                "sender_id": msg.sender_id,
-                "chat_id": msg.chat_id,
-                "channel": msg.channel,
-            })
-            
+            result = await executor.execute(
+                {
+                    "payload": msg.content,
+                    "timestamp": 0,
+                    "order_id": msg.session_key,
+                    "sender_id": msg.sender_id,
+                    "chat_id": msg.chat_id,
+                    "channel": msg.channel,
+                }
+            )
+
             if result.get("success") and result.get("response_text"):
                 from caduceus.bus import OutboundMessage
+
                 response = OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -64,21 +67,21 @@ async def executor_loop(bus: MessageBus, executor: HermesExecutor, channels: dic
                 await bus.publish_outbound(response)
             elif result.get("error"):
                 logger.error(f"Execution error: {result['error']}")
-        
+
         except Exception as e:
             logger.error(f"Executor loop error: {e}", exc_info=True)
 
 
 async def outbound_dispatcher(bus: MessageBus, channels: dict):
     """Consume outbound messages and route to appropriate channel.
-    
+
     Args:
         bus: MessageBus instance
         channels: Dict of {name: channel} for message delivery
     """
     while True:
         msg = await bus.consume_outbound()
-        
+
         channel = channels.get(msg.channel)
         if channel:
             try:
@@ -97,58 +100,59 @@ def load_config(config_path: str) -> dict:
         print(f"Error: Config not found at {path}")
         print("Copy tools/config.json.example to .galaxy/config.json")
         sys.exit(1)
-    
+
     with open(path) as f:
         return json.load(f)
 
 
 def build_channels(config: dict, bus: MessageBus) -> dict:
     """Instantiate channels based on configuration.
-    
+
     Returns dict of {channel_name: channel_instance}.
     """
     channels = {}
-    
+
     # Telegram channel: enabled if telegram_token is present and valid
     token = config.get("telegram_token", "")
     if token and "CHANGE-ME" not in token:
         channels["telegram"] = TelegramChannel(config, bus)
         logger.info("Telegram channel enabled")
-    
+
     # Web channel: enabled if web config present with enabled=true
     web_config = config.get("web", {})
     if web_config.get("enabled", False):
         channels["web"] = WebChannel(web_config, bus)
         logger.info(f"Web channel enabled on port {web_config.get('port', 8080)}")
-    
+
     return channels
 
 
 async def run_gateway(config: dict, test_mode: bool = False):
     """Main gateway coroutine.
-    
+
     Args:
         config: Configuration dictionary
         test_mode: If True, validate config and exit without starting
     """
     bus = MessageBus()
     channels = build_channels(config, bus)
-    
+
     if not channels:
         logger.error("No channels configured. Check config.json.")
         logger.error("Need telegram_token or web.enabled=true")
         return
-    
+
     # Build executor
+    # PHASE 1: Testing locally in submodule (use current working directory)
+    # PHASE 2: Production (use config.get("repo_path") when running from parent)
+    repo_root = Path.cwd()  # Current directory for Phase 1 testing
     executor_config = {
-        "orders_dir": str(
-            Path(config.get("repo_path", ".")) / ".sisyphus" / "notepads" / "galaxy-orders"
-        ),
+        "orders_dir": str(repo_root / ".sisyphus" / "notepads" / "galaxy-orders"),
         "timeout": config.get("executor_timeout", 180),
         "poll_interval": config.get("executor_poll_interval", 1.0),
     }
     executor = HermesExecutor(executor_config)
-    
+
     if test_mode:
         channel_names = ", ".join(channels.keys())
         print(f"Caduceus gateway — test mode")
@@ -157,45 +161,45 @@ async def run_gateway(config: dict, test_mode: bool = False):
         print(f"  Orders dir: {executor_config['orders_dir']}")
         print("Config valid. Exiting test mode.")
         return
-    
+
     # Graceful shutdown
     shutdown_event = asyncio.Event()
-    
+
     def signal_handler():
         logger.info("Shutdown signal received")
         shutdown_event.set()
-    
+
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, signal_handler)
-    
+
     # Start all channels
     channel_names = ", ".join(channels.keys())
     logger.info(f"🏥 Caduceus gateway starting — channels: {channel_names}")
-    
+
     tasks = []
     try:
         # Start channels
         for name, channel in channels.items():
             await channel.start()
             logger.info(f"  ✓ {name} channel started")
-        
+
         # Start background loops
         tasks.append(asyncio.create_task(executor_loop(bus, executor, channels)))
         tasks.append(asyncio.create_task(outbound_dispatcher(bus, channels)))
-        
+
         logger.info("🏥 Caduceus gateway online")
-        
+
         # Wait for shutdown signal
         await shutdown_event.wait()
-    
+
     finally:
         logger.info("Shutting down...")
-        
+
         # Cancel background tasks
         for task in tasks:
             task.cancel()
-        
+
         # Stop channels
         for name, channel in channels.items():
             try:
@@ -203,7 +207,7 @@ async def run_gateway(config: dict, test_mode: bool = False):
                 logger.info(f"  ✓ {name} channel stopped")
             except Exception as e:
                 logger.error(f"  ✗ {name} stop error: {e}")
-        
+
         logger.info("🏥 Caduceus gateway offline")
 
 
@@ -214,33 +218,38 @@ def main():
         usage="%(prog)s [options]",
     )
     parser.add_argument(
-        "--config", "-c",
-        default=str(Path(__file__).parent.parent.parent.parent / ".galaxy" / "config.json"),
+        "--config",
+        "-c",
+        default=str(
+            Path(__file__).parent.parent.parent.parent / ".galaxy" / "config.json"
+        ),
         help="Path to config.json (default: .galaxy/config.json)",
     )
     parser.add_argument(
-        "--test-mode", "-t",
+        "--test-mode",
+        "-t",
         action="store_true",
         help="Validate config and exit without starting",
     )
     parser.add_argument(
-        "--log-level", "-l",
+        "--log-level",
+        "-l",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Configure logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
+
     config = load_config(args.config)
-    
+
     try:
         asyncio.run(run_gateway(config, test_mode=args.test_mode))
     except KeyboardInterrupt:
