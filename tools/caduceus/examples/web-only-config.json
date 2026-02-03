@@ -1,0 +1,16 @@
+{
+  "telegram_token": "",
+  "authorized_users": [],
+  "machines": {
+    "local": {
+      "host": "localhost",
+      "repo_path": "/home/user/projects/my-project"
+    }
+  },
+  "default_machine": "local",
+  "web": {
+    "enabled": true,
+    "port": 8080,
+    "authorized_users": []
+  }
+}
