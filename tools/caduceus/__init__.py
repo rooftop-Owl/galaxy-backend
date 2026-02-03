@@ -37,14 +37,23 @@ __author__ = "Galaxy Protocol Team"
 # Core components
 from .bus import MessageBus, InboundMessage, OutboundMessage
 
-# Base abstractions
-from .channels.base import BaseChannel
-from .executors.base import Executor
-
 __all__ = [
     "MessageBus",
     "InboundMessage",
     "OutboundMessage",
-    "BaseChannel",
-    "Executor",
 ]
+
+# Base abstractions — imported when available (built in later tasks)
+try:
+    from .channels.base import BaseChannel
+
+    __all__.append("BaseChannel")
+except ImportError:
+    pass
+
+try:
+    from .executors.base import Executor
+
+    __all__.append("Executor")
+except ImportError:
+    pass
