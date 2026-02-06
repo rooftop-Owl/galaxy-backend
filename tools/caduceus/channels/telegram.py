@@ -347,15 +347,8 @@ class TelegramChannel(BaseChannel):
                 f"\U0001f4e1 \u2192 *{name}*", parse_mode="Markdown"
             )
 
-        # Also publish to MessageBus for gateway routing
-        sender_id, chat_id, user_id = self.resolve_user_identity(update)
-        await self._handle_message(
-            sender_id=sender_id,
-            chat_id=chat_id,
-            content=order_text,
-            metadata={"source": "telegram", "machine": name},
-            user_id=user_id,
-        )
+        # Note: MessageBus publishing disabled - using filesystem bridge (Hermes)
+        # Avoids duplicate orders when both filesystem and MessageBus are active
 
     async def cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """Get machine status. Usage: /status [machine|all]"""
