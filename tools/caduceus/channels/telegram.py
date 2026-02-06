@@ -681,11 +681,11 @@ class TelegramChannel(BaseChannel):
                         order_payload = msg_data.get("order_payload", "")
                         if order_payload:
                             header = (
-                                f"{emoji} <b>{from_agent}</b>\n"
-                                f"\U0001f4e8 <i>{order_payload[:100]}</i>\n\n"
+                                f"{emoji} *{from_agent}*\n"
+                                f"\U0001f4e8 _{order_payload[:100]}_\n\n"
                             )
                         else:
-                            header = f"{emoji} <b>{from_agent}</b>\n\n"
+                            header = f"{emoji} *{from_agent}*\n\n"
 
                         full_text = header + message
                         chunks = []
@@ -707,7 +707,7 @@ class TelegramChannel(BaseChannel):
                             for chunk in chunks:
                                 try:
                                     await self.app.bot.send_message(
-                                        chat_id=user_id, text=chunk, parse_mode="HTML"
+                                        chat_id=user_id, text=chunk, parse_mode="Markdown"
                                     )
                                 except Exception:
                                     try:
