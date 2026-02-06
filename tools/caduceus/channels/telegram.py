@@ -568,6 +568,51 @@ class TelegramChannel(BaseChannel):
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
+    async def cmd_stars(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Manage GitHub star lists. Usage: /stars <action> [args]"""
+        if not self.is_authorized(update.effective_user.id):
+            return
+
+        if not ctx.args:
+            await update.message.reply_text(
+                "⭐ *GitHub Star Management*\n\n"
+                "Usage:\n"
+                "`/stars list` — Show current organization\n"
+                "`/stars audit` — Find uncategorized starred repos\n"
+                "`/stars sync` — Apply categories to GitHub\n"
+                "`/stars --sync-from-github` — Import all GitHub stars\n\n"
+                "See `/help` for more commands",
+                parse_mode="Markdown",
+            )
+            return
+
+        action = " ".join(ctx.args)
+
+        # Create order for star-curator agent
+        machine_name = self.default_machine
+        machine = self.machines[machine_name]
+
+        order_text = f"/stars {action}"
+        order_file = self.create_order(
+            machine_name, machine, order_text, update.effective_chat.id
+        )
+
+        if order_file:
+            self.pending_orders[order_file] = {
+                "machine": machine_name,
+                "chat_id": update.effective_chat.id,
+                "order_text": order_text,
+            }
+            await update.message.reply_text(
+                f"⭐ Processing: `/stars {action}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Failed to create order (machine not local)",
+                parse_mode="Markdown",
+            )
+
     async def cmd_help(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """Show available commands."""
         if not self.is_authorized(update.effective_user.id):
@@ -579,6 +624,7 @@ class TelegramChannel(BaseChannel):
             "`/status [machine|all]` — Machine status (git, tests, reports)\n"
             "`/concerns [machine|all]` — Latest Stargazer concerns\n"
             "`/feed <url> [note]` — Ingest reference into knowledge archive\n"
+            "`/stars <action>` — Manage GitHub star lists\n"
             "`/order [machine|all] <msg>` — Send order to Stargazer\n"
             "`/machines` — List registered machines\n"
             "`/help` — This message\n\n"
@@ -828,6 +874,7 @@ class TelegramChannel(BaseChannel):
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler("concerns", self.cmd_concerns))
         self.app.add_handler(CommandHandler("feed", self.cmd_feed))
+        self.app.add_handler(CommandHandler("stars", self.cmd_stars))
         self.app.add_handler(CommandHandler("order", self.cmd_order))
         self.app.add_handler(CommandHandler("machines", self.cmd_machines))
         self.app.add_handler(
