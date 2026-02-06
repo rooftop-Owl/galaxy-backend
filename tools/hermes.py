@@ -61,7 +61,33 @@ signal.signal(signal.SIGTERM, shutdown)
 
 
 def build_prompt(payload):
-    """Wrap payload with context hints and territory constraints."""
+    """Wrap payload with context hints and command-specific routing."""
+    # Detect /stars commands and route to star-curator protocol
+    if payload.strip().startswith("/stars"):
+        return (
+            "[Galaxy Order: /stars command]\n"
+            "\n"
+            "You are the STAR CURATOR. Execute the /stars command using the star-curator protocol.\n"
+            "\n"
+            "DATA FILE: .sisyphus/stars.json (this is the source of truth)\n"
+            "SYNC SCRIPT: tools/galaxy/stars-sync.sh\n"
+            "\n"
+            "For /stars list:\n"
+            "1. Read .sisyphus/stars.json with the Read tool\n"
+            "2. Parse the JSON to extract lists and repos\n"
+            "3. Return a summary: list names with repo counts\n"
+            "\n"
+            "For /stars audit:\n"
+            "1. Fetch GitHub stars: gh api user/starred --paginate --jq '.[].full_name'\n"
+            "2. Compare against .sisyphus/stars.json repos\n"
+            "3. Report orphans (starred but not in config)\n"
+            "\n"
+            "RESPOND CONCISELY for Telegram.\n"
+            "\n"
+            "Command: " + payload
+        )
+    
+    # Default prompt for general orders
     return (
         "[Galaxy Order via Telegram]\n"
         "\n"
