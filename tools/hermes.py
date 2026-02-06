@@ -122,6 +122,8 @@ def process_order(order_file, server_url):
             return False
 
         order = json.loads(claimed_file.read_text())
+        # Use order_id from JSON if present (for Telegram orders with custom IDs)
+        order_id = order.get("order_id", order_id)
         payload = order.get("payload", "").strip()
 
         if not payload:
