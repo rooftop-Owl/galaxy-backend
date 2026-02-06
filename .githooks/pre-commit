@@ -1,0 +1,406 @@
+#!/bin/bash
+#
+# Tiered Pre-Commit Hook (Issue #88)
+# Validates commits with 3-tier system:
+# - Tier 1 (always): Security checks (secrets, large files, root org)
+# - Tier 2 (feat/fix/refactor/perf/test/release/hotfix): Full validation
+# - Tier 3 (chore/docs/style): Security + conditional only
+# - Merge/cherry-pick commits: Allowed on main with Tier 1 only
+#
+# Exit codes: 0 (allow commit), non-zero (block commit)
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Redirect output to stderr (standard for git hooks)
+exec 1>&2
+
+# Find repository root (works from any subdirectory)
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$REPO_ROOT" ]; then
+    echo -e "${RED}❌ ERROR: Not in a git repository${NC}"
+    exit 1
+fi
+
+# Detect branch type for tiered validation
+detect_branch_tier() {
+    local CURRENT_BRANCH=$(git branch --show-current)
+    
+    # Tier 1 (housekeeping): chore, docs, style branches
+    if [[ "$CURRENT_BRANCH" =~ ^(chore|docs|style)/ ]]; then
+        echo "housekeeping"
+        return
+    fi
+    
+    # Tier 2 (feature work): feat, fix, refactor, perf, test branches
+    if [[ "$CURRENT_BRANCH" =~ ^(feat|fix|refactor|perf|test)/ ]]; then
+        echo "feature"
+        return
+    fi
+    
+    # Tier 2 (release branches): release/* or hotfix/*
+    if [[ "$CURRENT_BRANCH" =~ ^(release|hotfix)/ ]]; then
+        echo "feature"
+        return
+    fi
+    
+    # Default to feature tier for unknown branch types
+    echo "feature"
+}
+
+BRANCH_TIER=$(detect_branch_tier)
+
+# 1. Session/Branch identity validation (CRITICAL - fail fast on wrong branch)
+echo -e "${BLUE}🔍 Validating session/branch identity...${NC}"
+SESSION_VALIDATOR="$REPO_ROOT/tools/validators/session-branch-validator.sh"
+
+if [ -f "$SESSION_VALIDATOR" ]; then
+    if ! "$SESSION_VALIDATOR" 2>&1; then
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠️  WARNING: session-branch-validator.sh not found${NC}"
+    echo -e "${YELLOW}   Expected: $SESSION_VALIDATOR${NC}"
+    echo -e "${YELLOW}   Skipping session/branch validation${NC}"
+fi
+
+# 2. Secrets detection
+echo -e "${YELLOW}🔍 Checking for secrets...${NC}"
+
+# Get list of staged non-documentation files (exclude .md, .txt, .rst files which often discuss security)
+STAGED_CODE_FILES=$(git diff --cached --name-only --diff-filter=AM | grep -vE '\.(md|txt|rst)$' || true)
+
+SECRETS_FOUND=false
+if [ -n "$STAGED_CODE_FILES" ]; then
+    for file in $STAGED_CODE_FILES; do
+        # Get the diff for this file
+        FILE_DIFF=$(git diff --cached -- "$file")
+        
+        # Check for secret patterns with double quotes: KEY = "value"
+        if echo "$FILE_DIFF" | grep -iE '(password|secret|token|api_key|apikey|private_key|aws_secret|credential)\s*[=:]\s*"[^"]{8,}"' > /dev/null 2>&1; then
+            if [ "$SECRETS_FOUND" = false ]; then
+                echo -e "${RED}❌ Potential secrets detected in staged changes${NC}"
+                SECRETS_FOUND=true
+            fi
+            echo -e "${RED}   - $file${NC}"
+        # Check for secret patterns with single quotes: KEY = 'value'
+        elif echo "$FILE_DIFF" | grep -iE "(password|secret|token|api_key|apikey|private_key|aws_secret|credential)\s*[=:]\s*'[^']{8,}'" > /dev/null 2>&1; then
+            if [ "$SECRETS_FOUND" = false ]; then
+                echo -e "${RED}❌ Potential secrets detected in staged changes${NC}"
+                SECRETS_FOUND=true
+            fi
+            echo -e "${RED}   - $file${NC}"
+        # Check for unquoted env-style: API_KEY=sk-xxx (16+ chars to reduce false positives)
+        elif echo "$FILE_DIFF" | grep -iE '(password|secret|token|api_key|apikey|private_key|aws_secret)=[a-zA-Z0-9_\-]{16,}' > /dev/null 2>&1; then
+            if [ "$SECRETS_FOUND" = false ]; then
+                echo -e "${RED}❌ Potential secrets detected in staged changes${NC}"
+                SECRETS_FOUND=true
+            fi
+            echo -e "${RED}   - $file${NC}"
+        fi
+    done
+fi
+
+if [ "$SECRETS_FOUND" = true ]; then
+    echo -e "${RED}   Do not commit credentials!${NC}"
+    echo -e "${RED}   If this is a false positive, use: git commit --no-verify${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ No secrets detected${NC}"
+
+# 3. Large file detection
+echo -e "${YELLOW}🔍 Checking file sizes...${NC}"
+MAX_SIZE=5242880  # 5MB in bytes
+LARGE_FILES_FOUND=false
+
+while IFS= read -r file; do
+    if [ -f "$file" ]; then
+        # Cross-platform stat (macOS and Linux)
+        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+        if [ "$size" -gt "$MAX_SIZE" ]; then
+            if [ "$LARGE_FILES_FOUND" = false ]; then
+                echo -e "${RED}❌ Large files detected (>5MB):${NC}"
+                LARGE_FILES_FOUND=true
+            fi
+            # Format size in human-readable format
+            if command -v numfmt &> /dev/null; then
+                size_human=$(numfmt --to=iec $size)
+            else
+                # Fallback for systems without numfmt
+                size_human="$size bytes"
+            fi
+            echo -e "${RED}   - $file ($size_human)${NC}"
+        fi
+    fi
+done < <(git diff --cached --name-only)
+
+if [ "$LARGE_FILES_FOUND" = true ]; then
+    echo -e "${RED}   Please use Git LFS for large files${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ All files are within size limits${NC}"
+
+# 4. Root directory validation
+echo -e "${BLUE}🔍 Checking root directory organization...${NC}"
+ALLOWED_ROOT="README\.md|LICENSE|CHANGELOG\.md|AGENTS\.md|CLAUDE\.md|CODE_OF_CONDUCT\.md|CONTRIBUTING\.md|SECURITY\.md|PROJECT_CONTEXT\.md|\.OPENCODE\.md|\.gitignore|\.mcp\.json|package\.json|package-lock\.json"
+# Only check ADDED files (A), not deletions (D) or modifications (M)
+NEW_ROOT_FILES=$(git diff --cached --name-status | grep "^A" | awk '{print $2}' | grep -v "/" | grep -vE "^($ALLOWED_ROOT)$")
+
+if [ -n "$NEW_ROOT_FILES" ]; then
+    echo -e "${RED}❌ New files in root directory not allowed${NC}"
+    echo "$NEW_ROOT_FILES" | while read -r file; do
+        echo -e "${RED}   - $file${NC}"
+    done
+    echo -e "${YELLOW}   Allowed files: README.md, LICENSE, CHANGELOG.md, AGENTS.md,${NC}"
+    echo -e "${YELLOW}   CODE_OF_CONDUCT.md, CONTRIBUTING.md, SECURITY.md,${NC}"
+    echo -e "${YELLOW}   PROJECT_CONTEXT.md, .OPENCODE.md, .gitignore, .mcp.json${NC}"
+    echo -e "${YELLOW}   See AGENTS.md Section 9 for file placement rules${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ Root directory organization is clean${NC}"
+
+# 5. Fidelity validation (convention checks) - TIER 2 ONLY
+if [ "$BRANCH_TIER" = "feature" ]; then
+    echo -e "${BLUE}🔍 Running fidelity checks...${NC}"
+    FIDELITY_VALIDATOR="$REPO_ROOT/tools/validators/fidelity_validators.py"
+    
+    if [ -f "$FIDELITY_VALIDATOR" ]; then
+        # Get list of staged files (only modified/added, not deleted)
+        STAGED_FILES=$(git diff --cached --name-only --diff-filter=AM)
+        
+        if [ -n "$STAGED_FILES" ]; then
+            # Run convention validation on staged files
+            # Use --convention flag with convention-001 (naming conventions)
+            if ! python3 "$FIDELITY_VALIDATOR" --convention convention-001 $STAGED_FILES 2>&1; then
+                FIDELITY_EXIT=$?
+                
+                # Check if there were CRITICAL violations
+                if [ $FIDELITY_EXIT -eq 1 ]; then
+                    echo -e "${RED}❌ CRITICAL fidelity violations detected${NC}"
+                    echo -e "${RED}   Fix violations before committing${NC}"
+                    echo -e "${RED}   Or run: python3 tools/validators/fidelity_validators.py --convention convention-001 [file]${NC}"
+                    exit 1
+                elif [ $FIDELITY_EXIT -eq 2 ]; then
+                    echo -e "${YELLOW}⚠️  Fidelity validation warnings (non-blocking)${NC}"
+                    # Continue with commit (warnings don't block)
+                fi
+            fi
+            echo -e "${GREEN}✅ Fidelity checks passed${NC}"
+        else
+            echo -e "${YELLOW}⚠️  No staged files to validate${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  WARNING: fidelity_validators.py not found${NC}"
+        echo -e "${YELLOW}   Expected: $FIDELITY_VALIDATOR${NC}"
+        echo -e "${YELLOW}   Skipping fidelity validation${NC}"
+    fi
+else
+    echo -e "${BLUE}ℹ️  Fidelity checks skipped (housekeeping branch)${NC}"
+fi
+
+# 6. Changelog fragment validation - TIER 2 ONLY
+if [ "$BRANCH_TIER" = "feature" ]; then
+    echo -e "${BLUE}🔍 Checking changelog fragment...${NC}"
+    
+    # Skip changelog check if merging or cherry-picking (fragment already validated)
+    if [ -f ".git/MERGE_HEAD" ] || [ -f ".git/CHERRY_PICK_HEAD" ]; then
+        if [ -f ".git/MERGE_HEAD" ]; then
+            echo -e "${YELLOW}⚠️  Merge commit — fragment check skipped${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Cherry-pick commit — fragment check skipped${NC}"
+        fi
+    else
+        CURRENT_BRANCH=$(git branch --show-current)
+        DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    
+        if [ "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]; then
+        PR_NUMBER=$(gh pr view --json number --jq '.number' 2>/dev/null || echo "")
+        
+        if [ -n "$PR_NUMBER" ]; then
+            FRAGMENT_PATTERN="changelog.d/${PR_NUMBER}-*.md"
+            FRAGMENT_EXISTS=$(find changelog.d -maxdepth 1 -name "${PR_NUMBER}-*.md" 2>/dev/null | head -1)
+            
+            if [ -z "$FRAGMENT_EXISTS" ]; then
+                echo -e "${RED}❌ Missing changelog fragment for PR #${PR_NUMBER}${NC}"
+                echo -e "${RED}   Required: changelog.d/${PR_NUMBER}-<description>.md${NC}"
+                echo ""
+                echo "Create fragment:"
+                echo "  cp changelog.d/_template.md changelog.d/${PR_NUMBER}-my-feature.md"
+                echo "  # Edit the file with your changes"
+                echo "  git add changelog.d/${PR_NUMBER}-my-feature.md"
+                echo ""
+                echo "Or bypass (not recommended): git commit --no-verify"
+                exit 1
+            fi
+            
+            echo -e "${GREEN}✓ Changelog fragment found: $(basename "$FRAGMENT_EXISTS")${NC}"
+        else
+            echo -e "${YELLOW}⚠️  No PR detected - changelog fragment recommended${NC}"
+        fi
+        else
+            echo -e "${YELLOW}⚠️  On default branch - no fragment required${NC}"
+        fi
+    fi
+else
+    echo -e "${BLUE}ℹ️  Changelog fragment check skipped (housekeeping branch)${NC}"
+fi
+
+# 7. Code of Conduct validation (only if files modified)
+VALIDATOR="$REPO_ROOT/tools/validators/conduct-validator.py"
+MODIFIED_FILES=$(git diff --cached --name-only)
+COC_MODIFIED=false
+
+if echo "$MODIFIED_FILES" | grep -q "CODE_OF_CONDUCT.md\|conduct-schema.json"; then
+    COC_MODIFIED=true
+fi
+
+if [ "$COC_MODIFIED" = true ]; then
+    echo -e "${BLUE}🔍 Validating Code of Conduct changes...${NC}"
+    
+    # Check if validator exists
+    if [ ! -f "$VALIDATOR" ]; then
+        echo -e "${YELLOW}⚠️  WARNING: conduct-validator.py not found${NC}"
+        echo -e "${YELLOW}   Expected: $VALIDATOR${NC}"
+        echo -e "${YELLOW}   Skipping Code of Conduct validation${NC}"
+    # Check if Python 3 is available
+    elif ! command -v python3 &> /dev/null; then
+        echo -e "${YELLOW}⚠️  WARNING: python3 not found in PATH${NC}"
+        echo -e "${YELLOW}   Skipping Code of Conduct validation${NC}"
+    else
+        # Run validator
+        if ! python3 "$VALIDATOR" --check-only; then
+            EXIT_CODE=$?
+            echo -e "${RED}❌ Code of Conduct validation FAILED${NC}"
+            echo -e "${RED}   Fix the issues above before committing${NC}"
+            echo -e "${RED}   Or run: python3 tools/validators/conduct-validator.py${NC}"
+            exit $EXIT_CODE
+        fi
+        echo -e "${GREEN}✅ Code of Conduct validation passed${NC}"
+    fi
+fi
+
+# 8. CHANGELOG.md recommended (warn only, don't block)
+echo -e "${BLUE}🔍 Checking CHANGELOG.md inclusion...${NC}"
+STAGED_NON_CHANGELOG=$(git diff --cached --name-only | grep -v "^CHANGELOG.md$" | grep -v "^$")
+
+if ! git diff --cached --name-only | grep -q "^CHANGELOG.md$"; then
+echo -e "${YELLOW}⚠️  CHANGELOG.md not updated${NC}"
+echo -e "${YELLOW}   Consider updating CHANGELOG.md or adding a changelog fragment${NC}"
+echo -e "${YELLOW}   See docs/guides/changelog-maintenance.md for guidelines${NC}"
+else
+echo -e "${GREEN}✅ CHANGELOG.md included${NC}"
+fi
+
+# 9. VERSION sync validation (only if VERSION staged)
+if git diff --cached --name-only | grep -q "^VERSION$"; then
+    echo -e "${BLUE}🔍 Validating VERSION sync...${NC}"
+    if [ -f "$REPO_ROOT/tools/scripts/version-sync.py" ]; then
+        if ! python3 "$REPO_ROOT/tools/scripts/version-sync.py"; then
+            echo -e "${RED}❌ VERSION file validation failed${NC}"
+            echo -e "${RED}   Please ensure VERSION matches CHANGELOG.md${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ VERSION sync validated${NC}"
+    else
+        echo -e "${YELLOW}⚠️  version-sync.py not found — skipping${NC}"
+    fi
+fi
+
+# 10. docs/ structure enforcement (only if docs/ staged)
+if git diff --cached --name-only | grep -q "^docs/"; then
+    echo -e "${BLUE}🔍 Checking docs/ structure...${NC}"
+    DOCS_HOOK="$REPO_ROOT/tools/hooks/pre-commit-docs.sh"
+    if [ -f "$DOCS_HOOK" ]; then
+        if ! "$DOCS_HOOK"; then
+            echo -e "${RED}❌ docs/ structure validation failed${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ docs/ structure validated${NC}"
+    else
+        echo -e "${YELLOW}⚠️  pre-commit-docs.sh not found — skipping${NC}"
+    fi
+fi
+
+# 11. Command metadata validation (only if commands staged) - TIER 2 ONLY
+if [ "$BRANCH_TIER" = "feature" ]; then
+    if git diff --cached --name-only | grep -q "^\.claude/commands/.*\.md$"; then
+        echo -e "${BLUE}🔍 Validating command metadata...${NC}"
+        CMD_VALIDATOR="$REPO_ROOT/tools/validators/command-metadata-validator.py"
+        if [ -f "$CMD_VALIDATOR" ]; then
+            if ! python3 "$CMD_VALIDATOR"; then
+                echo -e "${RED}❌ Command metadata validation failed${NC}"
+                echo -e "${RED}   Run: python3 tools/validators/command-metadata-validator.py${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ Command metadata validated${NC}"
+        else
+            echo -e "${YELLOW}⚠️  command-metadata-validator.py not found — skipping${NC}"
+        fi
+    fi
+fi
+
+# 12. Documentation sync validation (consolidated from steps 12, 15, 16) - TIER 2 ONLY
+if [ "$BRANCH_TIER" = "feature" ]; then
+    if git diff --cached --name-only | grep -qE "^\.claude/(commands|skills|agents|rules)/|^AGENTS\.md$|^README\.md$|^docs/"; then
+        echo -e "${BLUE}🔍 Checking documentation sync...${NC}"
+        DOC_SYNC_SCRIPT="$REPO_ROOT/tools/scripts/doc-sync-update.py"
+        
+        if [ -f "$DOC_SYNC_SCRIPT" ]; then
+            if ! python3 "$DOC_SYNC_SCRIPT" --check 2>&1; then
+                echo -e "${RED}❌ Documentation counts are out of sync${NC}"
+                echo -e "${RED}   Run: python3 tools/scripts/doc-sync-update.py --apply${NC}"
+                echo -e "${RED}   Or bypass (not recommended): git commit --no-verify${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ Documentation sync validated${NC}"
+        else
+            echo -e "${YELLOW}⚠️  doc-sync-update.py not found — skipping${NC}"
+        fi
+    fi
+else
+    echo -e "${BLUE}ℹ️  Documentation sync check skipped (housekeeping branch)${NC}"
+fi
+
+# 13. Journal integrity validation (only if JOURNAL.md staged)
+if git diff --cached --name-only | grep -q "^\.sisyphus/JOURNAL\.md$"; then
+    echo -e "${BLUE}🔍 Validating journal integrity...${NC}"
+    JOURNAL_VALIDATOR="$REPO_ROOT/tools/validators/journal-integrity-validator.py"
+    if [ -f "$JOURNAL_VALIDATOR" ]; then
+        if ! python3 "$JOURNAL_VALIDATOR"; then
+            echo -e "${RED}❌ Journal integrity validation failed${NC}"
+            echo -e "${RED}   The journal is insert-only. No deletions or edits to existing entries.${NC}"
+            echo -e "${RED}   Run: python3 tools/validators/journal-integrity-validator.py --verbose${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Journal integrity validated${NC}"
+    else
+        echo -e "${YELLOW}⚠️  journal-integrity-validator.py not found — skipping${NC}"
+    fi
+fi
+
+# 14. Agent housing protocol validation (only if agents or profiles staged) - TIER 2 ONLY
+if [ "$BRANCH_TIER" = "feature" ]; then
+    if git diff --cached --name-only | grep -qE "^\.claude/agents/.*\.md$|\.opencode/profiles/.*\.json$"; then
+        echo -e "${BLUE}🔍 Validating agent housing protocol...${NC}"
+        HOUSING_VALIDATOR="$REPO_ROOT/tools/validators/agent-housing-validator.py"
+        if [ -f "$HOUSING_VALIDATOR" ]; then
+            if ! python3 "$HOUSING_VALIDATOR"; then
+                echo -e "${RED}❌ Agent housing protocol validation failed${NC}"
+                echo -e "${RED}   Custom agents must NOT have 'model:' in frontmatter${NC}"
+                echo -e "${RED}   Custom agents must exist in ALL 4 profiles${NC}"
+                echo -e "${RED}   Run: python3 tools/validators/agent-housing-validator.py --verbose${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ Agent housing validated${NC}"
+        else
+            echo -e "${YELLOW}⚠️  agent-housing-validator.py not found — skipping${NC}"
+        fi
+    fi
+fi
+
+# All checks passed
+exit 0
