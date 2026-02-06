@@ -303,17 +303,19 @@ class TelegramChannel(BaseChannel):
         )
         orders_dir.mkdir(parents=True, exist_ok=True)
 
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        order_id = f"telegram:{chat_id}"
+
         order = {
-            "type": "galaxy_order",
-            "from": "galaxy-gazer",
-            "target": machine_name,
-            "command": "general",
             "payload": order_text,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "order_id": order_id,
+            "sender_id": str(chat_id),
+            "chat_id": str(chat_id),
+            "channel": "telegram",
             "acknowledged": False,
         }
 
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         order_file = orders_dir / f"{ts}.json"
         with open(order_file, "w") as f:
             json.dump(order, f, indent=2)
@@ -695,12 +697,14 @@ class TelegramChannel(BaseChannel):
                         # Send to specific chat_id if present, otherwise all authorized
                         target_chat = msg_data.get("chat_id")
                         recipients = [target_chat] if target_chat else self.authorized
-                        
+
                         for user_id in recipients:
                             for chunk in chunks:
                                 try:
                                     await self.app.bot.send_message(
-                                        chat_id=user_id, text=chunk, parse_mode="Markdown"
+                                        chat_id=user_id,
+                                        text=chunk,
+                                        parse_mode="Markdown",
                                     )
                                 except Exception:
                                     try:
@@ -750,6 +754,20 @@ class TelegramChannel(BaseChannel):
                         if machine_config and self.is_local(machine_config):
                             repo = machine_config["repo_path"]
                             order_ts = Path(order_file).stem
+
+                            # Use order_id from JSON for outbox lookup, fallback to filename
+                            order_id = order_data.get("order_id", order_ts)
+
+                            # Skip if outbox file exists (outbox has better routing with chat_id)
+                            outbox_file = (
+                                repo
+                                / f".sisyphus/notepads/galaxy-outbox/hermes-{order_id}.json"
+                            )
+                            if outbox_file.exists():
+                                completed.append(order_file)
+                                continue
+
+                            # Only check response files if no outbox exists
                             matching_response = (
                                 repo
                                 / f".sisyphus/notepads/galaxy-order-response-{order_ts}.md"
@@ -766,12 +784,6 @@ class TelegramChannel(BaseChannel):
                                 responses = sorted(glob.glob(response_pattern))
                                 if responses:
                                     response_file = responses[-1]
-
-                            # Skip if outbox file exists (outbox has better routing with chat_id)
-                            outbox_file = repo / f".sisyphus/notepads/galaxy-outbox/hermes-{order_ts}.json"
-                            if outbox_file.exists():
-                                completed.append(order_file)
-                                continue
 
                             if response_file:
                                 with open(response_file) as rf:
