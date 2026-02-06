@@ -22,17 +22,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Paths
-# PHASE 1: Testing locally in submodule (use MODULE_ROOT for all paths)
-# PHASE 2: Production (change back to REPO_ROOT when running from parent)
+# PHASE 2: Production mode - orders/responses in parent repo, not submodule
 REPO_ROOT = Path(
     __file__
 ).parent.parent.parent  # project root (when loaded as submodule)
 MODULE_ROOT = Path(__file__).parent.parent  # galaxy-protocol module root
-ORDERS_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-orders"
-ARCHIVE_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-orders-archive"
-RESPONSE_DIR = MODULE_ROOT / ".sisyphus/notepads"
-OUTBOX_DIR = MODULE_ROOT / ".sisyphus/notepads/galaxy-outbox"
-HEARTBEAT_FILE = MODULE_ROOT / ".sisyphus/notepads/galaxy-session-heartbeat.json"
+ORDERS_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-orders"
+ARCHIVE_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-orders-archive"
+RESPONSE_DIR = REPO_ROOT / ".sisyphus/notepads"
+OUTBOX_DIR = REPO_ROOT / ".sisyphus/notepads/galaxy-outbox"
+HEARTBEAT_FILE = REPO_ROOT / ".sisyphus/notepads/galaxy-session-heartbeat.json"
 GALAXY_CONFIG = REPO_ROOT / ".galaxy/config.json"  # Config stays in parent
 SESSION_FILE = MODULE_ROOT / ".galaxy/hermes-session.json"
 
